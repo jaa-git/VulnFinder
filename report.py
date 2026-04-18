@@ -8,8 +8,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm, mm
 from reportlab.platypus import (
-    BaseDocTemplate, Frame, PageBreak, PageTemplate, Paragraph,
-    Preformatted, Spacer, Table, TableStyle, KeepTogether,
+    BaseDocTemplate, CondPageBreak, Frame, PageBreak, PageTemplate, Paragraph,
+    Preformatted, Spacer, Table, TableStyle, KeepTogether, KeepInFrame,
 )
 from reportlab.graphics.shapes import Drawing, Rect, String
 from reportlab.graphics.charts.piecharts import Pie
@@ -145,64 +145,81 @@ def _severity_bar_chart(counts: dict):
 
 
 def _finding_block(finding: Finding, styles):
-    header_tbl = Table(
-        [[Paragraph(f"<b>{_escape(finding.name)}</b>", styles["finding_h"]),
-          _severity_pill(finding.severity),
-          _status_pill(finding.status)]],
-        colWidths=[None, 55, 45],
-    )
+    """Render a finding as a flat list of flowables.
+
+    Important: evidence is rendered as a standalone Preformatted flowable
+    *outside* any Table. reportlab cannot split a single table cell across
+    pages — Preformatted, in contrast, splits natively — so huge evidence
+    blocks (e.g. a 400-line service listing) must not live inside a table
+    or the layout engine raises LayoutError.
+    """
+    colour = SEV_COLOUR[finding.severity] if finding.status in (Status.FAIL, Status.WARN, Status.ERROR) else STATUS_COLOUR[finding.status]
+
+    # Small header card (always small enough to fit on any page).
+    header_cells = [
+        Paragraph(f"<b>{_escape(finding.name)}</b>", styles["finding_h"]),
+        _severity_pill(finding.severity),
+        _status_pill(finding.status),
+    ]
+    header_tbl = Table([header_cells], colWidths=[None, 55, 45])
     header_tbl.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-    ]))
-
-    rows = []
-    if finding.description:
-        rows.append(Paragraph(_escape(finding.description), styles["body"]))
-    if finding.evidence:
-        rows.append(Paragraph("<b>Evidence</b>", styles["small"]))
-        rows.append(Preformatted(_wrap_evidence(finding.evidence), styles["mono"]))
-    if finding.recommendation:
-        rows.append(Paragraph("<b>Recommendation</b>", styles["small"]))
-        rows.append(Paragraph(_escape(finding.recommendation), styles["body"]))
-
-    inner = Table([[header_tbl]] + [[r] for r in rows], colWidths=[None])
-    inner.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), colors.white),
         ("BOX", (0, 0), (-1, -1), 0.5, BORDER),
-        ("LINEBELOW", (0, 0), (-1, 0), 0.5, BORDER),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("LINEBEFORE", (0, 0), (0, -1), 4, colour),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (0, -1), 10),
+        ("LEFTPADDING", (1, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
         ("TOPPADDING", (0, 0), (-1, -1), 6),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
     ]))
 
-    colour = SEV_COLOUR[finding.severity] if finding.status in (Status.FAIL, Status.WARN, Status.ERROR) else STATUS_COLOUR[finding.status]
-    wrapper = Table([[inner]], colWidths=[None])
-    wrapper.setStyle(TableStyle([
-        ("LINEBEFORE", (0, 0), (0, -1), 4, colour),
-        ("LEFTPADDING", (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-    ]))
+    out = [CondPageBreak(60), header_tbl]
 
-    return KeepTogether([wrapper, Spacer(1, 6)])
+    def _indented(flowable):
+        # Small indent so body content aligns with the header text, with a
+        # light accent rule on the left.
+        t = Table([[flowable]], colWidths=[None])
+        t.setStyle(TableStyle([
+            ("LINEBEFORE", (0, 0), (0, -1), 4, colour),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        return t
+
+    if finding.description:
+        out.append(_indented(Paragraph(_escape(finding.description), styles["body"])))
+
+    if finding.evidence:
+        out.append(_indented(Paragraph("<b>Evidence</b>", styles["small"])))
+        # Standalone Preformatted — this *can* split across pages.
+        # Wrapping inside a table would make it un-splittable and blow up
+        # on long outputs like "Running services".
+        out.append(Preformatted(_wrap_evidence(finding.evidence), styles["mono"]))
+
+    if finding.recommendation:
+        out.append(_indented(Paragraph("<b>Recommendation</b>", styles["small"])))
+        out.append(_indented(Paragraph(_escape(finding.recommendation), styles["body"])))
+
+    out.append(Spacer(1, 8))
+    return out
 
 
 def _escape(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _wrap_evidence(text: str, width: int = 95) -> str:
-    """Pre-wrap monospace evidence so long paths/URLs don't run off the page.
+def _wrap_evidence(text: str, width: int = 95, max_lines: int = 250) -> str:
+    """Pre-wrap monospace evidence for the PDF.
 
-    reportlab's Preformatted element renders text verbatim without wrapping,
-    so we break lines ourselves at `width` characters, hard-breaking tokens
-    without whitespace (registry paths, tokens, hex blobs).
+    - Breaks long lines at `width` characters (hard-breaks tokens without
+      whitespace so registry paths and URLs never run off the page).
+    - Caps the total rendered lines at `max_lines`; the full untruncated
+      output is still in findings.json and scan.log. This prevents a single
+      cell from being taller than an A4 page (reportlab refuses to split a
+      single cell across pages and raises LayoutError).
     """
     out = []
     for raw in (text or "").splitlines() or [""]:
@@ -224,6 +241,11 @@ def _wrap_evidence(text: str, width: int = 95) -> str:
                 out.append(raw[i:i + width])
         else:
             out.extend(wrapped)
+
+    if len(out) > max_lines:
+        omitted = len(out) - max_lines
+        out = out[:max_lines]
+        out.append(f"... [truncated {omitted} more lines — see scan.log / findings.json for the full output]")
     return "\n".join(out)
 
 
@@ -355,7 +377,7 @@ def build_report(results: list[tuple[str, list[Finding]]], host: str, output_pat
             key=lambda f: (_sev_rank(f.severity), _status_rank(f.status)),
         )
         for f in sorted_findings:
-            story.append(_finding_block(f, styles))
+            story.extend(_finding_block(f, styles))
         story.append(Spacer(1, 6))
 
     doc.build(story)
