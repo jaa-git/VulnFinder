@@ -14,8 +14,9 @@ Grab the prebuilt `VulnFinder.exe` from the [Releases page](../../releases/lates
 
 ### Flags
 ```
-VulnFinder.exe [-o path.pdf] [--no-pdf] [--quiet]
+VulnFinder.exe [-o path.pdf] [--no-pdf] [--quiet] [--offline]
 ```
+`--offline` skips the online vulnerability feed fetcher.
 
 ### Exit codes
 - `0` — no criticals / highs
@@ -26,18 +27,28 @@ VulnFinder.exe [-o path.pdf] [--no-pdf] [--quiet]
 
 | Category | Examples |
 |---|---|
-| **System** | OS version, Secure Boot, TPM state, Credential Guard, Windows 10 EOL |
+| **System** | OS version, Secure Boot, TPM, Credential Guard, Windows 10 EOL |
 | **Firewall** | Profile enabled state, default inbound action, enabled allow-rules |
 | **Defender / AV** | Real-time, tamper protection, signature age, ASR rules, Controlled Folder Access |
-| **Accounts** | Admin group members, Guest enabled, built-in Administrator, PasswordRequired=False, autologon, UAC, LSA protection, LM hashes |
-| **Password & Lockout** | Min length, complexity, history, lockout threshold, audit subcategory coverage |
+| **Accounts** | Admin group members, Guest, built-in Administrator, PasswordRequired=False, autologon, UAC, LSA protection, LM hashes |
+| **Credential Protection** | WDigest plaintext caching, LMCompatibilityLevel, NTLM restrictions, CachedLogonsCount, RestrictedAdmin |
+| **Password & Lockout** | Min length, complexity, history, lockout threshold, secedit, audit subcategory coverage |
 | **BitLocker** | OS volume protection, encryption cipher, key protectors |
-| **Updates** | Most recent hotfix age, WU services, NoAutoUpdate policy |
-| **Network** | Listening TCP sockets, risky ports (23, 445, 3389 etc.), SMBv1, SMB signing, RDP / NLA, weak SSL/TLS |
-| **Shares** | Share list, Everyone ACLs, null session access |
-| **Services** | Risky services (Telnet, RemoteRegistry, WebClient...), execution policy, script-block logging, unquoted service paths |
+| **Updates** | Hotfix age, WU services, NoAutoUpdate policy |
+| **Network** | Listening TCP ports, risky ports (23, 445, 3389 etc.), SMBv1, SMB signing, RDP / NLA, weak SSL/TLS |
+| **Name Resolution & Legacy Protocols** | LLMNR, NetBIOS-over-TCP, WPAD, mDNS, Print Spooler, PowerShell v2 engine, Windows Script Host, AutoRun, hidden extensions |
+| **Shares** | Everyone ACLs, null session access |
+| **Services** | Risky services (Telnet, RemoteRegistry, WebClient...), execution policy, script-block logging, unquoted service paths, autoruns |
+| **Installed Software & Tasks** | Full inventory, outdated risky products (Flash, old Java/WinRAR), scheduled tasks running as SYSTEM, unsigned drivers, Office macro policy, processes from Temp, writable PATH entries |
+| **Exploit Mitigations** | VBS / HVCI, Credential Guard, DEP, ASLR, CFG, Kernel DMA Protection, LocalAccountTokenFilterPolicy, Microsoft Vulnerable Driver Blocklist |
+| **Logging & Visibility** | Event log sizing, PowerShell transcription & module logging, Sysmon, core defence services |
+| **Live Vulnerability Advisories** | Pulls `feeds.json` from this repo at scan time and scrapes CISA KEV, MSRC, BleepingComputer, The Hacker News and NVD for current Windows-relevant advisories |
 
 Findings are classified `CRITICAL / HIGH / MEDIUM / LOW / INFO` and each carries an evidence snippet and a remediation command.
+
+## Adding new advisory sources
+
+The file [`feeds.json`](feeds.json) in this repo is fetched on every scan — edit it to add or remove sources without rebuilding the exe. Supported `type` values: `cisa_kev`, `rss`, `nvd`.
 
 ## Building from source
 

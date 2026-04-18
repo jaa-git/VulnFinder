@@ -1,3 +1,4 @@
+import textwrap
 from datetime import datetime
 from pathlib import Path
 
@@ -50,7 +51,7 @@ def _styles():
         "body":    ParagraphStyle("body", parent=base["BodyText"], fontSize=10, leading=14, textColor=PRIMARY),
         "small":   ParagraphStyle("small", parent=base["BodyText"], fontSize=9, leading=12, textColor=colors.HexColor("#334155")),
         "finding_h": ParagraphStyle("finding_h", parent=base["Heading3"], fontSize=12, leading=15, textColor=PRIMARY, spaceBefore=8, spaceAfter=2),
-        "mono":    ParagraphStyle("mono", parent=base["Code"], fontSize=8, leading=10, textColor=colors.HexColor("#111827"), backColor=BG_SOFT, borderPadding=4, leftIndent=0, rightIndent=0),
+        "mono":    ParagraphStyle("mono", parent=base["Code"], fontName="Courier", fontSize=7.5, leading=10, textColor=colors.HexColor("#111827"), backColor=BG_SOFT, borderPadding=3, leftIndent=0, rightIndent=0, wordWrap=None),
         "cover_big": ParagraphStyle("coverbig", parent=base["Title"], fontSize=42, leading=48, textColor=colors.white, alignment=TA_LEFT),
         "cover_sub": ParagraphStyle("coversub", parent=base["Normal"], fontSize=14, leading=18, textColor=colors.HexColor("#cbd5e1"), alignment=TA_LEFT),
     }
@@ -163,7 +164,7 @@ def _finding_block(finding: Finding, styles):
         rows.append(Paragraph(_escape(finding.description), styles["body"]))
     if finding.evidence:
         rows.append(Paragraph("<b>Evidence</b>", styles["small"]))
-        rows.append(Preformatted(finding.evidence, styles["mono"]))
+        rows.append(Preformatted(_wrap_evidence(finding.evidence), styles["mono"]))
     if finding.recommendation:
         rows.append(Paragraph("<b>Recommendation</b>", styles["small"]))
         rows.append(Paragraph(_escape(finding.recommendation), styles["body"]))
@@ -194,6 +195,36 @@ def _finding_block(finding: Finding, styles):
 
 def _escape(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _wrap_evidence(text: str, width: int = 95) -> str:
+    """Pre-wrap monospace evidence so long paths/URLs don't run off the page.
+
+    reportlab's Preformatted element renders text verbatim without wrapping,
+    so we break lines ourselves at `width` characters, hard-breaking tokens
+    without whitespace (registry paths, tokens, hex blobs).
+    """
+    out = []
+    for raw in (text or "").splitlines() or [""]:
+        raw = raw.rstrip()
+        if len(raw) <= width:
+            out.append(raw)
+            continue
+        wrapped = textwrap.wrap(
+            raw,
+            width=width,
+            break_long_words=True,
+            break_on_hyphens=False,
+            drop_whitespace=False,
+            replace_whitespace=False,
+            tabsize=4,
+        )
+        if not wrapped:
+            for i in range(0, len(raw), width):
+                out.append(raw[i:i + width])
+        else:
+            out.extend(wrapped)
+    return "\n".join(out)
 
 
 def build_report(results: list[tuple[str, list[Finding]]], host: str, output_path: Path):

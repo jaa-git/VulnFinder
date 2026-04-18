@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "description": "Live advisory sources pulled by VulnFinder at scan time. Edit or add to this file in the repo to add new sources — the scanner fetches the latest copy on every run.",
+  "max_items_per_source": 25,
+  "sources": [
+    {
+      "name": "CISA — Known Exploited Vulnerabilities (Microsoft)",
+      "url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+      "type": "cisa_kev",
+      "filter": {"vendor_contains": "Microsoft"},
+      "severity": "HIGH",
+      "note": "CISA's KEV catalog — CVEs confirmed to be under active exploitation. Microsoft-only entries are kept."
+    },
+    {
+      "name": "MSRC — Security Updates blog",
+      "url": "https://msrc.microsoft.com/blog/feed/",
+      "type": "rss",
+      "filter": {"title_contains_any": ["windows", "security", "cve", "patch", "vulnerab"]},
+      "severity": "MEDIUM",
+      "note": "Official Microsoft Security Response Center announcements."
+    },
+    {
+      "name": "BleepingComputer — Microsoft coverage",
+      "url": "https://www.bleepingcomputer.com/feed/",
+      "type": "rss",
+      "filter": {"title_contains_any": ["windows", "microsoft", "defender", "azure"]},
+      "severity": "MEDIUM",
+      "note": "BleepingComputer news feed, filtered for Microsoft-related stories."
+    },
+    {
+      "name": "The Hacker News — Microsoft tag",
+      "url": "https://feeds.feedburner.com/TheHackersNews",
+      "type": "rss",
+      "filter": {"title_contains_any": ["windows", "microsoft", "defender", "patch tuesday"]},
+      "severity": "MEDIUM",
+      "note": "THN general feed filtered client-side for Microsoft stories."
+    },
+    {
+      "name": "NVD — recent Windows CVEs",
+      "url": "https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=windows&resultsPerPage=30&pubStartDate={start_iso}&pubEndDate={end_iso}",
+      "type": "nvd",
+      "dynamic_since_days": 30,
+      "severity": "MEDIUM",
+      "note": "National Vulnerability Database search for CVEs mentioning Windows, last 30 days."
+    }
+  ]
+}

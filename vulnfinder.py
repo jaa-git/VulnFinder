@@ -96,7 +96,11 @@ def main():
     parser.add_argument("-o", "--output", default=None, help="Output PDF path (default: ./reports/vulnfinder_<host>_<timestamp>.pdf)")
     parser.add_argument("--no-pdf", action="store_true", help="Skip PDF generation (console output only)")
     parser.add_argument("--quiet", action="store_true", help="Don't print per-finding lines to console")
+    parser.add_argument("--offline", action="store_true", help="Skip the online vulnerability feed fetcher")
     args = parser.parse_args()
+
+    if args.offline:
+        os.environ["VULNFINDER_OFFLINE"] = "1"
 
     if os.name != "nt":
         print("VulnFinder targets Windows. Current platform:", platform.system())
@@ -121,7 +125,10 @@ def main():
     for category, module in checks.ALL_MODULES:
         print(f"  - {category}")
         try:
-            findings = module.run()
+            if module is checks.feeds:
+                findings = module.run(offline=args.offline)
+            else:
+                findings = module.run()
         except Exception as e:
             from checks.runner import Finding
             findings = [Finding(

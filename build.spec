@@ -11,12 +11,18 @@ hiddenimports += [
     'checks.firewall',
     'checks.defender',
     'checks.accounts',
+    'checks.credentials',
     'checks.policies',
     'checks.encryption',
     'checks.updates',
     'checks.network',
+    'checks.protocols',
     'checks.shares',
     'checks.services',
+    'checks.software',
+    'checks.mitigations',
+    'checks.event_logging',
+    'checks.feeds',
 ]
 
 a = Analysis(
