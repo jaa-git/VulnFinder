@@ -1,9 +1,12 @@
 import argparse
 import ctypes
+import json
 import os
 import platform
+import re
 import socket
 import sys
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -35,18 +38,64 @@ STATUS_COLOUR_ANSI = {
 }
 RESET = "\033[0m"
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
 
 def _colour_enabled() -> bool:
     if os.environ.get("NO_COLOR"):
         return False
-    # Enable ANSI on recent Windows terminals
     if os.name == "nt":
         try:
             kernel32 = ctypes.windll.kernel32
             kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
         except Exception:
             return False
-    return sys.stdout.isatty()
+    try:
+        return sys.stdout.isatty()
+    except Exception:
+        return False
+
+
+class _Tee:
+    """Duplicate writes to stdout/stderr and a log file on disk.
+
+    The console stream keeps ANSI colour; the on-disk copy is stripped so
+    the log stays readable in Notepad.
+    """
+
+    def __init__(self, console, log_file):
+        self.console = console
+        self.log_file = log_file
+
+    def write(self, data):
+        if not isinstance(data, str):
+            try:
+                data = data.decode("utf-8", errors="replace")
+            except Exception:
+                data = str(data)
+        try:
+            self.console.write(data)
+        except Exception:
+            pass
+        try:
+            self.log_file.write(_ANSI_RE.sub("", data))
+            self.log_file.flush()
+        except Exception:
+            pass
+        return len(data)
+
+    def flush(self):
+        for s in (self.console, self.log_file):
+            try:
+                s.flush()
+            except Exception:
+                pass
+
+    def isatty(self):
+        try:
+            return bool(self.console.isatty())
+        except Exception:
+            return False
 
 
 def print_console(results, host: str, colour: bool):
@@ -91,12 +140,96 @@ def print_console(results, host: str, colour: bool):
         print()
 
 
+def findings_to_dict(results, host: str, admin: bool) -> dict:
+    cats = []
+    totals_sev = {s.value: 0 for s in Severity}
+    totals_stat = {s.value: 0 for s in Status}
+    for cat, findings in results:
+        items = []
+        for f in findings:
+            totals_sev[f.severity.value] += 1
+            totals_stat[f.status.value] += 1
+            items.append({
+                "name": f.name,
+                "status": f.status.value,
+                "severity": f.severity.value,
+                "description": f.description,
+                "evidence": f.evidence,
+                "recommendation": f.recommendation,
+                "references": list(f.references or []),
+            })
+        cats.append({"category": cat, "findings": items})
+    return {
+        "host": host,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "admin": admin,
+        "os": platform.platform(),
+        "python": platform.python_version(),
+        "totals": {"by_severity": totals_sev, "by_status": totals_stat},
+        "categories": cats,
+    }
+
+
+def _base_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).parent
+
+
+def _resolve_run_dir(custom: str | None, host: str) -> Path:
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if custom:
+        base = Path(custom).expanduser()
+        if not base.is_absolute():
+            base = _base_dir() / base
+    else:
+        base = _base_dir() / "reports" / f"vulnfinder_{host}_{stamp}"
+
+    # Try to create it. If permission denied, fall back to the user profile.
+    for candidate in (base, Path.home() / "Documents" / "VulnFinder" / f"vulnfinder_{host}_{stamp}"):
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            # sanity write test
+            test = candidate / ".write_test"
+            test.write_text("ok", encoding="utf-8")
+            test.unlink()
+            return candidate
+        except Exception:
+            continue
+    # last resort: tempdir
+    import tempfile
+    fallback = Path(tempfile.gettempdir()) / f"vulnfinder_{host}_{stamp}"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+def _pause_if_frozen():
+    """Keep the console open when running as a frozen exe.
+
+    Unconditional when frozen — safer than trying to detect whether the user
+    launched us from an existing shell. Accepts Enter or a timeout.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    print()
+    print("Press Enter to close this window.")
+    try:
+        input()
+    except EOFError:
+        pass
+    except Exception:
+        pass
+
+
 def main():
     parser = argparse.ArgumentParser(description="VulnFinder — Windows 10/11 security audit")
-    parser.add_argument("-o", "--output", default=None, help="Output PDF path (default: ./reports/vulnfinder_<host>_<timestamp>.pdf)")
-    parser.add_argument("--no-pdf", action="store_true", help="Skip PDF generation (console output only)")
-    parser.add_argument("--quiet", action="store_true", help="Don't print per-finding lines to console")
+    parser.add_argument("-o", "--output", default=None,
+                        help="Output folder (default: <exe-dir>\\reports\\vulnfinder_<host>_<timestamp>\\). "
+                             "The PDF, scan log and findings.json will all be written inside.")
+    parser.add_argument("--no-pdf", action="store_true", help="Skip PDF generation (log + JSON only)")
+    parser.add_argument("--quiet", action="store_true", help="Don't print per-finding lines")
     parser.add_argument("--offline", action="store_true", help="Skip the online vulnerability feed fetcher")
+    parser.add_argument("--no-pause", action="store_true", help="Don't pause at end when frozen")
     args = parser.parse_args()
 
     if args.offline:
@@ -109,112 +242,127 @@ def main():
     host = socket.gethostname()
     admin = is_admin()
 
-    print(f"VulnFinder — scanning {host}")
-    print(f"Admin:   {'yes' if admin else 'NO — many checks will be limited'}")
-    print(f"OS:      {platform.platform()}")
-    print(f"Python:  {platform.python_version()}")
-    print()
+    run_dir = _resolve_run_dir(args.output, host)
+    log_path = run_dir / "scan.log"
+    pdf_path = run_dir / "report.pdf"
+    json_path = run_dir / "findings.json"
+    error_path = run_dir / "error.log"
 
-    if not admin:
-        print("[!] Running without administrator privileges.")
-        print("    BitLocker, TPM, secedit, several registry reads and service queries will be")
-        print("    incomplete. Re-run from an elevated terminal for a full audit.\n")
+    log_file = open(log_path, "w", encoding="utf-8", errors="replace")
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    sys.stdout = _Tee(original_stdout, log_file)
+    sys.stderr = _Tee(original_stderr, log_file)
 
-    print("Running checks...")
-    results = []
-    for category, module in checks.ALL_MODULES:
-        print(f"  - {category}")
-        try:
-            if module is checks.feeds:
-                findings = module.run(offline=args.offline)
-            else:
-                findings = module.run()
-        except Exception as e:
-            from checks.runner import Finding
-            findings = [Finding(
-                name=f"{category} check crashed",
-                status=Status.ERROR,
-                severity=Severity.MEDIUM,
-                description=f"The {category} module raised {type(e).__name__}.",
-                evidence=str(e),
-            )]
-        results.append((category, findings))
-
-    print()
-    if not args.quiet:
-        print_console(results, host, colour=_colour_enabled())
-
-    if not args.no_pdf:
-        if args.output:
-            out_path = Path(args.output).expanduser()
-            if not out_path.is_absolute():
-                out_path = _base_dir() / out_path
-        else:
-            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            out_path = _base_dir() / "reports" / f"vulnfinder_{host}_{stamp}.pdf"
-
-        print(f"Writing PDF report to {out_path}...")
-        try:
-            build_report(results, host, out_path)
-            print(f"Done: {out_path.resolve()}")
-        except PermissionError as e:
-            fallback = Path.home() / "Documents" / "VulnFinder" / out_path.name
-            print(f"[!] Could not write to {out_path} ({e}). Falling back to {fallback}...")
-            try:
-                build_report(results, host, fallback)
-                print(f"Done: {fallback.resolve()}")
-            except Exception as e2:
-                print(f"[!!] Fallback also failed: {type(e2).__name__}: {e2}")
-                _pause_if_frozen()
-                sys.exit(3)
-        except Exception as e:
-            import traceback
-            print(f"[!!] PDF generation failed: {type(e).__name__}: {e}")
-            traceback.print_exc()
-            _pause_if_frozen()
-            sys.exit(3)
-
-    # exit code: non-zero if any CRITICAL/HIGH fails
-    critical = sum(1 for _, fs in results for f in fs if f.severity == Severity.CRITICAL and f.status in (Status.FAIL, Status.ERROR))
-    high     = sum(1 for _, fs in results for f in fs if f.severity == Severity.HIGH and f.status in (Status.FAIL, Status.ERROR))
-
-    _pause_if_frozen()
-
-    if critical:
-        sys.exit(2)
-    if high:
-        sys.exit(1)
-    sys.exit(0)
-
-
-def _base_dir() -> Path:
-    """Directory to anchor output paths.
-
-    When frozen by PyInstaller the working dir after UAC elevation is usually
-    C:\\Windows\\System32, which isn't where the user expects output. Use the
-    folder containing the exe instead; fall back to the script dir in dev.
-    """
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).parent
-
-
-def _pause_if_frozen():
-    """Keep the console open when double-clicked (frozen, no console parent)."""
-    if not getattr(sys, "frozen", False):
-        return
-    # Only pause if we own the console (double-clicked), not when spawned
-    # from an existing terminal where the user will see the output anyway.
+    exit_code = 0
     try:
-        import ctypes
-        kernel32 = ctypes.windll.kernel32
-        pid_list = (ctypes.c_uint * 1)()
-        n = kernel32.GetConsoleProcessList(pid_list, 1)
-        if n <= 1:
-            print()
-            input("Press Enter to close...")
-    except Exception:
-        pass
+        print(f"VulnFinder — scanning {host}")
+        print(f"Output:  {run_dir}")
+        print(f"Admin:   {'yes' if admin else 'NO — many checks will be limited'}")
+        print(f"OS:      {platform.platform()}")
+        print(f"Python:  {platform.python_version()}")
+        print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print()
+
+        if not admin:
+            print("[!] Running without administrator privileges.")
+            print("    BitLocker, TPM, secedit, several registry reads and service queries will be")
+            print("    incomplete. Re-run from an elevated terminal for a full audit.\n")
+
+        print("Running checks...")
+        results = []
+        for category, module in checks.ALL_MODULES:
+            t0 = datetime.now()
+            print(f"  - {category} ... ", end="", flush=True)
+            try:
+                if module is checks.feeds:
+                    findings = module.run(offline=args.offline)
+                else:
+                    findings = module.run()
+                dt = (datetime.now() - t0).total_seconds()
+                print(f"{len(findings)} findings [{dt:.1f}s]")
+            except Exception as e:
+                from checks.runner import Finding
+                dt = (datetime.now() - t0).total_seconds()
+                print(f"CRASH [{dt:.1f}s]  {type(e).__name__}: {e}")
+                traceback.print_exc()
+                findings = [Finding(
+                    name=f"{category} check crashed",
+                    status=Status.ERROR,
+                    severity=Severity.MEDIUM,
+                    description=f"The {category} module raised {type(e).__name__}.",
+                    evidence=f"{type(e).__name__}: {e}\n{traceback.format_exc()}",
+                )]
+            results.append((category, findings))
+
+        print()
+        if not args.quiet:
+            print_console(results, host, colour=_colour_enabled())
+
+        # Always write findings.json
+        try:
+            json_path.write_text(
+                json.dumps(findings_to_dict(results, host, admin), indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            print(f"Findings JSON: {json_path}")
+        except Exception as e:
+            print(f"[!] Could not write findings.json: {type(e).__name__}: {e}")
+
+        # PDF
+        if not args.no_pdf:
+            print(f"Writing PDF report to {pdf_path}...")
+            try:
+                build_report(results, host, pdf_path)
+                print(f"Done: {pdf_path}")
+            except Exception as e:
+                err_msg = f"PDF generation failed: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+                print(f"[!!] {err_msg}")
+                try:
+                    error_path.write_text(err_msg, encoding="utf-8")
+                except Exception:
+                    pass
+                exit_code = 3
+
+        critical = sum(1 for _, fs in results for f in fs if f.severity == Severity.CRITICAL and f.status in (Status.FAIL, Status.ERROR))
+        high = sum(1 for _, fs in results for f in fs if f.severity == Severity.HIGH and f.status in (Status.FAIL, Status.ERROR))
+        print(f"\nFinished: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Run folder: {run_dir}")
+
+        if exit_code == 0:
+            if critical:
+                exit_code = 2
+            elif high:
+                exit_code = 1
+
+    except SystemExit:
+        raise
+    except Exception as e:
+        err_msg = f"Unhandled error: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        print(f"\n[!!] {err_msg}")
+        try:
+            error_path.write_text(err_msg, encoding="utf-8")
+        except Exception:
+            pass
+        exit_code = 4
+    finally:
+        # Restore streams and flush log before exiting.
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+        try:
+            log_file.close()
+        except Exception:
+            pass
+
+    if not args.no_pause:
+        _pause_if_frozen()
+
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
@@ -223,9 +371,9 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as e:
-        import traceback
+        # Shouldn't happen — main() has its own handler — but belt & braces.
         print()
-        print(f"[!!] Unhandled error: {type(e).__name__}: {e}")
+        print(f"[!!] Fatal: {type(e).__name__}: {e}")
         traceback.print_exc()
         _pause_if_frozen()
-        sys.exit(4)
+        sys.exit(5)
