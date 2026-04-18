@@ -146,17 +146,40 @@ def main():
 
     if not args.no_pdf:
         if args.output:
-            out_path = Path(args.output)
+            out_path = Path(args.output).expanduser()
+            if not out_path.is_absolute():
+                out_path = _base_dir() / out_path
         else:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            out_path = Path("reports") / f"vulnfinder_{host}_{stamp}.pdf"
+            out_path = _base_dir() / "reports" / f"vulnfinder_{host}_{stamp}.pdf"
+
         print(f"Writing PDF report to {out_path}...")
-        build_report(results, host, out_path)
-        print(f"Done: {out_path.resolve()}")
+        try:
+            build_report(results, host, out_path)
+            print(f"Done: {out_path.resolve()}")
+        except PermissionError as e:
+            fallback = Path.home() / "Documents" / "VulnFinder" / out_path.name
+            print(f"[!] Could not write to {out_path} ({e}). Falling back to {fallback}...")
+            try:
+                build_report(results, host, fallback)
+                print(f"Done: {fallback.resolve()}")
+            except Exception as e2:
+                print(f"[!!] Fallback also failed: {type(e2).__name__}: {e2}")
+                _pause_if_frozen()
+                sys.exit(3)
+        except Exception as e:
+            import traceback
+            print(f"[!!] PDF generation failed: {type(e).__name__}: {e}")
+            traceback.print_exc()
+            _pause_if_frozen()
+            sys.exit(3)
 
     # exit code: non-zero if any CRITICAL/HIGH fails
     critical = sum(1 for _, fs in results for f in fs if f.severity == Severity.CRITICAL and f.status in (Status.FAIL, Status.ERROR))
     high     = sum(1 for _, fs in results for f in fs if f.severity == Severity.HIGH and f.status in (Status.FAIL, Status.ERROR))
+
+    _pause_if_frozen()
+
     if critical:
         sys.exit(2)
     if high:
@@ -164,5 +187,45 @@ def main():
     sys.exit(0)
 
 
+def _base_dir() -> Path:
+    """Directory to anchor output paths.
+
+    When frozen by PyInstaller the working dir after UAC elevation is usually
+    C:\\Windows\\System32, which isn't where the user expects output. Use the
+    folder containing the exe instead; fall back to the script dir in dev.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).parent
+
+
+def _pause_if_frozen():
+    """Keep the console open when double-clicked (frozen, no console parent)."""
+    if not getattr(sys, "frozen", False):
+        return
+    # Only pause if we own the console (double-clicked), not when spawned
+    # from an existing terminal where the user will see the output anyway.
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        pid_list = (ctypes.c_uint * 1)()
+        n = kernel32.GetConsoleProcessList(pid_list, 1)
+        if n <= 1:
+            print()
+            input("Press Enter to close...")
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:
+        import traceback
+        print()
+        print(f"[!!] Unhandled error: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        _pause_if_frozen()
+        sys.exit(4)
