@@ -17,8 +17,8 @@ from xml.etree import ElementTree as ET
 
 from .runner import Finding, Severity, Status, truncate
 
-FEEDS_INDEX_URL = "https://raw.githubusercontent.com/jaa-git/VulnFinder/main/feeds.json"
-USER_AGENT = "VulnFinder/0.3 (+https://github.com/jaa-git/VulnFinder)"
+FEEDS_INDEX_URL = "https://raw.githubusercontent.com/jaa-git/Bastion/main/feeds.json"
+USER_AGENT = "Bastion/1.0 (+https://github.com/jaa-git/Bastion)"
 # Some CDNs (notably Cloudflare in front of BleepingComputer) 403 non-browser
 # agents, so we retry with a Firefox UA before giving up.
 BROWSER_UA = (
@@ -89,7 +89,7 @@ def run(offline: bool = False, index_url: str | None = None):
             name="Vulnerability feed index unreachable",
             status=Status.WARN,
             severity=Severity.INFO,
-            description="Could not download feeds.json from the VulnFinder repository.",
+            description="Could not download feeds.json from the Bastion repository.",
             evidence=f"{type(e).__name__}: {e}\nURL: {idx_url}",
             recommendation="Check internet connectivity, or run with --offline to suppress this section.",
         )]

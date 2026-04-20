@@ -32,7 +32,7 @@ def run_all():
     results = []
     for category, module in ALL_MODULES:
         if module is feeds:
-            findings = module.run(offline=bool(os.environ.get("VULNFINDER_OFFLINE")))
+            findings = module.run(offline=bool(os.environ.get("BASTION_OFFLINE")))
         else:
             findings = module.run()
         results.append((category, findings))

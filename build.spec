@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec for VulnFinder — builds a single-file, UAC-elevated exe.
+# PyInstaller spec for Bastion — builds a single-file, UAC-elevated exe.
 
 from PyInstaller.utils.hooks import collect_submodules
 
@@ -26,7 +26,7 @@ hiddenimports += [
 ]
 
 a = Analysis(
-    ['vulnfinder.py'],
+    ['bastion.py'],
     pathex=['.'],
     binaries=[],
     datas=[],
@@ -45,7 +45,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='VulnFinder',
+    name='Bastion',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -1,6 +1,6 @@
 @echo off
-REM Build VulnFinder.exe using PyInstaller.
-REM Output: dist\VulnFinder.exe (single-file, UAC-elevated console app).
+REM Build Bastion.exe using PyInstaller.
+REM Output: dist\Bastion.exe (single-file, UAC-elevated console app).
 
 setlocal
 cd /d "%~dp0"
@@ -18,11 +18,11 @@ echo [+] Cleaning previous build...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 
-echo [+] Building VulnFinder.exe ...
+echo [+] Building Bastion.exe ...
 python -m PyInstaller --clean --noconfirm build.spec || goto :err
 
 echo.
-echo [OK] Built: %CD%\dist\VulnFinder.exe
+echo [OK] Built: %CD%\dist\Bastion.exe
 echo      Copy to your VM and run as Administrator.
 goto :eof
 

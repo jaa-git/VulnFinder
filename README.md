@@ -1,20 +1,20 @@
-# VulnFinder
+# Bastion
 
 Windows 10 / 11 security audit tool. Run it with admin rights and it enumerates misconfigurations and weak posture across firewall, Defender, user accounts, password / lockout policy, BitLocker, updates, open ports, shares and services, then writes a styled PDF report.
 
 ## Download
 
-Grab the prebuilt `VulnFinder.exe` from the [Releases page](../../releases/latest). No Python required — single file, ~28 MB.
+Grab the prebuilt `Bastion.exe` from the [Releases page](../../releases/latest). No Python required — single file, ~28 MB.
 
 ## Usage
 
-1. Copy `VulnFinder.exe` to the target machine.
+1. Copy `Bastion.exe` to the target machine.
 2. Right-click → **Run as administrator** (the exe also requests UAC elevation automatically).
-3. When it finishes, the PDF is written to `reports\vulnfinder_<hostname>_<timestamp>.pdf` next to the exe.
+3. When it finishes, the PDF, scan log and `findings.json` are written to `reports\bastion_<hostname>_<timestamp>\` next to the exe.
 
 ### Flags
 ```
-VulnFinder.exe [-o path.pdf] [--no-pdf] [--quiet] [--offline]
+Bastion.exe [-o folder] [--no-pdf] [--quiet] [--offline] [--no-pause]
 ```
 `--offline` skips the online vulnerability feed fetcher.
 
@@ -22,6 +22,8 @@ VulnFinder.exe [-o path.pdf] [--no-pdf] [--quiet] [--offline]
 - `0` — no criticals / highs
 - `1` — one or more HIGH failures
 - `2` — one or more CRITICAL failures
+- `3` — PDF generation failed (see `error.log` in the run folder)
+- `4` — unhandled error (see `error.log`)
 
 ## What it checks
 
@@ -46,6 +48,20 @@ VulnFinder.exe [-o path.pdf] [--no-pdf] [--quiet] [--offline]
 
 Findings are classified `CRITICAL / HIGH / MEDIUM / LOW / INFO` and each carries an evidence snippet and a remediation command.
 
+## Run folder contents
+
+Every run creates its own subfolder under `reports\`:
+
+```
+reports\bastion_<hostname>_<timestamp>\
+    report.pdf          # styled audit report
+    findings.json       # full machine-readable output
+    scan.log            # tee'd stdout/stderr (readable in Notepad)
+    error.log           # only written on failure
+```
+
+If the exe directory isn't writable (e.g. running from `Program Files`), Bastion falls back to `%USERPROFILE%\Documents\Bastion\` and finally to `%TEMP%\`.
+
 ## Adding new advisory sources
 
 The file [`feeds.json`](feeds.json) in this repo is fetched on every scan — edit it to add or remove sources without rebuilding the exe. Supported `type` values: `cisa_kev`, `rss`, `nvd`.
@@ -54,8 +70,8 @@ The file [`feeds.json`](feeds.json) in this repo is fetched on every scan — ed
 
 ```powershell
 pip install -r requirements.txt
-python vulnfinder.py          # run directly
-build.bat                      # produce dist\VulnFinder.exe
+python bastion.py              # run directly
+build.bat                      # produce dist\Bastion.exe
 ```
 
 Requires Python 3.11+ on Windows.

@@ -103,7 +103,7 @@ def print_console(results, host: str, colour: bool):
         return f"{code}{text}{RESET}" if colour else text
 
     print()
-    print(c("\033[1;97m", f"VulnFinder — {host}"))
+    print(c("\033[1;97m", f"Bastion — {host}"))
     print(c("\033[90m", f"Scan completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"))
     print()
 
@@ -183,10 +183,10 @@ def _resolve_run_dir(custom: str | None, host: str) -> Path:
         if not base.is_absolute():
             base = _base_dir() / base
     else:
-        base = _base_dir() / "reports" / f"vulnfinder_{host}_{stamp}"
+        base = _base_dir() / "reports" / f"bastion_{host}_{stamp}"
 
     # Try to create it. If permission denied, fall back to the user profile.
-    for candidate in (base, Path.home() / "Documents" / "VulnFinder" / f"vulnfinder_{host}_{stamp}"):
+    for candidate in (base, Path.home() / "Documents" / "Bastion" / f"bastion_{host}_{stamp}"):
         try:
             candidate.mkdir(parents=True, exist_ok=True)
             # sanity write test
@@ -198,7 +198,7 @@ def _resolve_run_dir(custom: str | None, host: str) -> Path:
             continue
     # last resort: tempdir
     import tempfile
-    fallback = Path(tempfile.gettempdir()) / f"vulnfinder_{host}_{stamp}"
+    fallback = Path(tempfile.gettempdir()) / f"bastion_{host}_{stamp}"
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
 
@@ -222,9 +222,9 @@ def _pause_if_frozen():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="VulnFinder — Windows 10/11 security audit")
+    parser = argparse.ArgumentParser(description="Bastion — Windows 10/11 security audit")
     parser.add_argument("-o", "--output", default=None,
-                        help="Output folder (default: <exe-dir>\\reports\\vulnfinder_<host>_<timestamp>\\). "
+                        help="Output folder (default: <exe-dir>\\reports\\bastion_<host>_<timestamp>\\). "
                              "The PDF, scan log and findings.json will all be written inside.")
     parser.add_argument("--no-pdf", action="store_true", help="Skip PDF generation (log + JSON only)")
     parser.add_argument("--quiet", action="store_true", help="Don't print per-finding lines")
@@ -233,10 +233,10 @@ def main():
     args = parser.parse_args()
 
     if args.offline:
-        os.environ["VULNFINDER_OFFLINE"] = "1"
+        os.environ["BASTION_OFFLINE"] = "1"
 
     if os.name != "nt":
-        print("VulnFinder targets Windows. Current platform:", platform.system())
+        print("Bastion targets Windows. Current platform:", platform.system())
         sys.exit(2)
 
     host = socket.gethostname()
@@ -256,7 +256,7 @@ def main():
 
     exit_code = 0
     try:
-        print(f"VulnFinder — scanning {host}")
+        print(f"Bastion — scanning {host}")
         print(f"Output:  {run_dir}")
         print(f"Admin:   {'yes' if admin else 'NO — many checks will be limited'}")
         print(f"OS:      {platform.platform()}")

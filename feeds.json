@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Live advisory sources pulled by VulnFinder at scan time. Edit or add to this file in the repo to add new sources — the scanner fetches the latest copy on every run.",
+  "description": "Live advisory sources pulled by Bastion at scan time. Edit or add to this file in the repo to add new sources — the scanner fetches the latest copy on every run.",
   "max_items_per_source": 25,
   "sources": [
     {
