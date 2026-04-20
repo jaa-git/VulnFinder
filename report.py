@@ -3,18 +3,16 @@ from datetime import datetime
 from pathlib import Path
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm, mm
 from reportlab.platypus import (
-    BaseDocTemplate, CondPageBreak, Frame, PageBreak, PageTemplate, Paragraph,
-    Preformatted, Spacer, Table, TableStyle, KeepTogether, KeepInFrame,
+    BaseDocTemplate, CondPageBreak, Frame, HRFlowable, PageBreak, PageTemplate,
+    Paragraph, Preformatted, Spacer, Table, TableStyle,
 )
 from reportlab.graphics.shapes import Drawing, Rect, String
-from reportlab.graphics.charts.piecharts import Pie
 from reportlab.graphics.charts.barcharts import HorizontalBarChart
-from reportlab.graphics.charts.legends import Legend
 
 from checks.runner import Finding, Severity, Status
 
@@ -39,21 +37,35 @@ PRIMARY = colors.HexColor("#0f172a")
 ACCENT  = colors.HexColor("#1d4ed8")
 BG_SOFT = colors.HexColor("#f1f5f9")
 BORDER  = colors.HexColor("#cbd5e1")
+MUTED   = colors.HexColor("#64748b")
+DIVIDER = colors.HexColor("#e2e8f0")
 
 
 def _styles():
     base = getSampleStyleSheet()
     s = {
-        "title":   ParagraphStyle("title", parent=base["Title"], fontSize=26, leading=30, textColor=PRIMARY, alignment=TA_LEFT, spaceAfter=4),
-        "subtitle":ParagraphStyle("subtitle", parent=base["Normal"], fontSize=12, leading=16, textColor=colors.HexColor("#475569"), spaceAfter=8),
-        "h1":      ParagraphStyle("h1", parent=base["Heading1"], fontSize=18, leading=22, textColor=PRIMARY, spaceBefore=14, spaceAfter=6),
-        "h2":      ParagraphStyle("h2", parent=base["Heading2"], fontSize=13, leading=17, textColor=ACCENT, spaceBefore=10, spaceAfter=4),
-        "body":    ParagraphStyle("body", parent=base["BodyText"], fontSize=10, leading=14, textColor=PRIMARY),
-        "small":   ParagraphStyle("small", parent=base["BodyText"], fontSize=9, leading=12, textColor=colors.HexColor("#334155")),
-        "finding_h": ParagraphStyle("finding_h", parent=base["Heading3"], fontSize=12, leading=15, textColor=PRIMARY, spaceBefore=8, spaceAfter=2),
-        "mono":    ParagraphStyle("mono", parent=base["Code"], fontName="Courier", fontSize=7.5, leading=10, textColor=colors.HexColor("#111827"), backColor=BG_SOFT, borderPadding=3, leftIndent=0, rightIndent=0, wordWrap=None),
-        "cover_big": ParagraphStyle("coverbig", parent=base["Title"], fontSize=42, leading=48, textColor=colors.white, alignment=TA_LEFT),
-        "cover_sub": ParagraphStyle("coversub", parent=base["Normal"], fontSize=14, leading=18, textColor=colors.HexColor("#cbd5e1"), alignment=TA_LEFT),
+        "title":    ParagraphStyle("title", parent=base["Title"], fontSize=26, leading=30, textColor=PRIMARY, alignment=TA_LEFT, spaceAfter=4),
+        "subtitle": ParagraphStyle("subtitle", parent=base["Normal"], fontSize=12, leading=16, textColor=colors.HexColor("#475569"), spaceAfter=14),
+        "h1":       ParagraphStyle("h1", parent=base["Heading1"], fontSize=18, leading=22, textColor=PRIMARY, spaceBefore=18, spaceAfter=8),
+        "h2":       ParagraphStyle("h2", parent=base["Heading2"], fontSize=13, leading=17, textColor=ACCENT, spaceBefore=14, spaceAfter=6),
+        "body":     ParagraphStyle("body", parent=base["BodyText"], fontSize=10, leading=14, textColor=PRIMARY),
+        "small":    ParagraphStyle("small", parent=base["BodyText"], fontSize=9, leading=12, textColor=colors.HexColor("#334155")),
+        # Finding header (used inside the header card table cell — no own spacing).
+        "finding_h":    ParagraphStyle("finding_h", parent=base["Heading3"], fontSize=11.5, leading=14, textColor=PRIMARY, spaceBefore=0, spaceAfter=0),
+        # Body copy inside a finding — consistent left indent aligns with the
+        # header card's coloured rail so the whole block reads as one unit.
+        "finding_body": ParagraphStyle("finding_body", parent=base["BodyText"], fontSize=10, leading=14, textColor=PRIMARY, leftIndent=14, rightIndent=10, spaceBefore=4, spaceAfter=2),
+        # Small uppercase caption (EVIDENCE / REMEDIATION) — subdued so it
+        # structures the block without competing with the content.
+        "finding_label": ParagraphStyle("finding_label", parent=base["BodyText"], fontName="Helvetica-Bold", fontSize=7.5, leading=10, textColor=MUTED, leftIndent=14, spaceBefore=10, spaceAfter=3),
+        # Evidence code block — soft background, thin border, indented text
+        # to match the rest of the finding body.
+        "mono":         ParagraphStyle("mono", parent=base["Code"], fontName="Courier", fontSize=7.8, leading=10.5, textColor=colors.HexColor("#0f172a"), backColor=BG_SOFT, borderColor=BORDER, borderWidth=0.5, borderPadding=7, leftIndent=14, rightIndent=10, spaceBefore=0, spaceAfter=4, wordWrap=None),
+        "cover_big":    ParagraphStyle("coverbig", parent=base["Title"], fontSize=42, leading=48, textColor=colors.white, alignment=TA_LEFT),
+        "cover_sub":    ParagraphStyle("coversub", parent=base["Normal"], fontSize=14, leading=18, textColor=colors.HexColor("#cbd5e1"), alignment=TA_LEFT),
+        # Category band (full-width dark header that introduces a section).
+        "cat_title":    ParagraphStyle("cat_title", fontName="Helvetica-Bold", fontSize=14, leading=18, textColor=colors.white),
+        "cat_count":    ParagraphStyle("cat_count", fontName="Helvetica", fontSize=9.5, leading=14, textColor=colors.HexColor("#cbd5e1"), alignment=TA_RIGHT),
     }
     return s
 
@@ -144,66 +156,97 @@ def _severity_bar_chart(counts: dict):
     return d
 
 
-def _finding_block(finding: Finding, styles):
-    """Render a finding as a flat list of flowables.
+def _category_band(title: str, num_findings: int, styles):
+    """Full-width dark band that introduces a new category section.
 
-    Important: evidence is rendered as a standalone Preformatted flowable
-    *outside* any Table. reportlab cannot split a single table cell across
-    pages — Preformatted, in contrast, splits natively — so huge evidence
-    blocks (e.g. a 400-line service listing) must not live inside a table
-    or the layout engine raises LayoutError.
+    Gives each category a clear visual boundary so findings read as a grouped
+    set instead of floating in a sea of white.
+    """
+    count_word = "finding" if num_findings == 1 else "findings"
+    tbl = Table(
+        [[
+            Paragraph(_escape(title), styles["cat_title"]),
+            Paragraph(f"{num_findings} {count_word}", styles["cat_count"]),
+        ]],
+        colWidths=[None, 90],
+    )
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), PRIMARY),
+        ("LINEBELOW",  (0, 0), (-1, -1), 3, ACCENT),
+        ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 14),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 14),
+        ("TOPPADDING",    (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
+    ]))
+    return tbl
+
+
+def _finding_block(finding: Finding, styles, is_last: bool = False):
+    """Render a finding as a grouped card.
+
+    Layout:
+      [ ▌ Finding name                          SEV   STATUS ]   <- header card
+          Description paragraph (indented to align with rail) .
+          EVIDENCE                                              <- small caption
+          [ code block with soft background + border           ]
+          REMEDIATION
+          Remediation paragraph .
+      ─────────────────────────────────────────────────────────   <- divider
+
+    The header card is a small Table (safe — always fits on a page). All body
+    content below the header is a flat sequence of flowables with a consistent
+    ``leftIndent`` so everything aligns to the rail without needing nested
+    tables. This matters because a single table cell cannot split across pages
+    in reportlab, and evidence blocks routinely run to 200+ lines.
     """
     colour = SEV_COLOUR[finding.severity] if finding.status in (Status.FAIL, Status.WARN, Status.ERROR) else STATUS_COLOUR[finding.status]
 
-    # Small header card (always small enough to fit on any page).
-    header_cells = [
-        Paragraph(f"<b>{_escape(finding.name)}</b>", styles["finding_h"]),
-        _severity_pill(finding.severity),
-        _status_pill(finding.status),
-    ]
-    header_tbl = Table([header_cells], colWidths=[None, 55, 45])
+    # Header card — colored left rail, name on the left, severity + status
+    # pills on the right. Always bounded, so Table is safe here.
+    header_tbl = Table(
+        [[
+            Paragraph(f"<b>{_escape(finding.name)}</b>", styles["finding_h"]),
+            _severity_pill(finding.severity),
+            _status_pill(finding.status),
+        ]],
+        colWidths=[None, 58, 46],
+    )
     header_tbl.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
-        ("BOX", (0, 0), (-1, -1), 0.5, BORDER),
-        ("LINEBEFORE", (0, 0), (0, -1), 4, colour),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (0, -1), 10),
-        ("LEFTPADDING", (1, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-        ("TOPPADDING", (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("BACKGROUND",    (0, 0), (-1, -1), colors.white),
+        ("BOX",           (0, 0), (-1, -1), 0.5, BORDER),
+        ("LINEBEFORE",    (0, 0), (0, -1), 4, colour),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING",   (0, 0), (0, -1), 12),
+        ("LEFTPADDING",   (1, 0), (-1, -1), 0),
+        ("RIGHTPADDING",  (0, 0), (-2, -1), 6),
+        ("RIGHTPADDING",  (-1, 0), (-1, -1), 12),
+        ("TOPPADDING",    (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
     ]))
 
-    out = [CondPageBreak(60), header_tbl]
-
-    def _indented(flowable):
-        # Small indent so body content aligns with the header text, with a
-        # light accent rule on the left.
-        t = Table([[flowable]], colWidths=[None])
-        t.setStyle(TableStyle([
-            ("LINEBEFORE", (0, 0), (0, -1), 4, colour),
-            ("LEFTPADDING", (0, 0), (-1, -1), 10),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-        ]))
-        return t
+    out = [CondPageBreak(80), header_tbl]
 
     if finding.description:
-        out.append(_indented(Paragraph(_escape(finding.description), styles["body"])))
+        out.append(Paragraph(_escape(finding.description), styles["finding_body"]))
 
     if finding.evidence:
-        out.append(_indented(Paragraph("<b>Evidence</b>", styles["small"])))
-        # Standalone Preformatted — this *can* split across pages.
-        # Wrapping inside a table would make it un-splittable and blow up
-        # on long outputs like "Running services".
+        out.append(Paragraph("EVIDENCE", styles["finding_label"]))
+        # Standalone Preformatted — can split across pages. Do NOT wrap in a
+        # table (see docstring).
         out.append(Preformatted(_wrap_evidence(finding.evidence), styles["mono"]))
 
     if finding.recommendation:
-        out.append(_indented(Paragraph("<b>Recommendation</b>", styles["small"])))
-        out.append(_indented(Paragraph(_escape(finding.recommendation), styles["body"])))
+        out.append(Paragraph("REMEDIATION", styles["finding_label"]))
+        out.append(Paragraph(_escape(finding.recommendation), styles["finding_body"]))
 
-    out.append(Spacer(1, 8))
+    # Breathing room + a hairline divider between findings so they don't blur
+    # together. Skip the divider after the last finding in a category — the
+    # next category band provides a stronger break.
+    out.append(Spacer(1, 10))
+    if not is_last:
+        out.append(HRFlowable(width="100%", thickness=0.4, color=DIVIDER,
+                              spaceBefore=0, spaceAfter=12))
     return out
 
 
@@ -333,11 +376,11 @@ def build_report(results: list[tuple[str, list[Finding]]], host: str, output_pat
         ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
     ]))
     story.append(tbl)
-    story.append(Spacer(1, 12))
+    story.append(Spacer(1, 18))
 
     story.append(Paragraph("Findings by Severity", styles["h2"]))
     story.append(_severity_bar_chart(sev_counts))
-    story.append(Spacer(1, 6))
+    story.append(Spacer(1, 12))
 
     # top issues summary
     critical_and_high = [f for f in all_findings if f.severity in (Severity.CRITICAL, Severity.HIGH) and f.status in (Status.FAIL, Status.WARN, Status.ERROR)]
@@ -371,14 +414,19 @@ def build_report(results: list[tuple[str, list[Finding]]], host: str, output_pat
     for category, findings in results:
         if not findings:
             continue
-        story.append(Paragraph(category, styles["h1"]))
         sorted_findings = sorted(
             findings,
             key=lambda f: (_sev_rank(f.severity), _status_rank(f.status)),
         )
-        for f in sorted_findings:
-            story.extend(_finding_block(f, styles))
-        story.append(Spacer(1, 6))
+        # Keep the category band with the first finding so a section never
+        # starts with just a banner at the bottom of a page.
+        story.append(CondPageBreak(120))
+        story.append(_category_band(category, len(sorted_findings), styles))
+        story.append(Spacer(1, 12))
+        last_idx = len(sorted_findings) - 1
+        for i, f in enumerate(sorted_findings):
+            story.extend(_finding_block(f, styles, is_last=(i == last_idx)))
+        story.append(Spacer(1, 14))
 
     doc.build(story)
     return output_path
