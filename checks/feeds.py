@@ -18,7 +18,13 @@ from xml.etree import ElementTree as ET
 from .runner import Finding, Severity, Status, truncate
 
 FEEDS_INDEX_URL = "https://raw.githubusercontent.com/jaa-git/VulnFinder/main/feeds.json"
-USER_AGENT = "VulnFinder/0.2 (+https://github.com/jaa-git/VulnFinder)"
+USER_AGENT = "VulnFinder/0.3 (+https://github.com/jaa-git/VulnFinder)"
+# Some CDNs (notably Cloudflare in front of BleepingComputer) 403 non-browser
+# agents, so we retry with a Firefox UA before giving up.
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) "
+    "Gecko/20100101 Firefox/128.0"
+)
 DEFAULT_TIMEOUT = 8
 
 _SEV_MAP = {
@@ -31,13 +37,32 @@ _SEV_MAP = {
 
 
 def _http_get(url: str, timeout: int = DEFAULT_TIMEOUT) -> str:
-    req = urllib.request.Request(url, headers={
-        "User-Agent": USER_AGENT,
-        "Accept": "application/json, application/rss+xml, application/xml, */*",
-    })
     ctx = ssl.create_default_context()
-    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
-        raw = r.read()
+    # Try our own UA first, then a browser UA, then a second browser attempt
+    # with a slightly longer timeout — covers transient 403s and slow DNS.
+    attempts = [
+        (USER_AGENT, timeout),
+        (BROWSER_UA, timeout),
+        (BROWSER_UA, timeout + 4),
+    ]
+    last_err: Exception | None = None
+    for ua, t in attempts:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": ua,
+            "Accept": "application/json, application/rss+xml, application/xml, */*",
+            "Accept-Language": "en-GB,en;q=0.8",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=t, context=ctx) as r:
+                raw = r.read()
+            break
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
+            last_err = e
+            continue
+    else:
+        # All attempts failed — re-raise the last error so the caller can record it.
+        raise last_err if last_err else RuntimeError("unknown fetch failure")
+
     for enc in ("utf-8", "latin-1"):
         try:
             return raw.decode(enc)

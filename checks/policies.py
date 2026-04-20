@@ -171,23 +171,30 @@ def run():
 
 def _parse_net_accounts(text: str) -> dict:
     out = {}
-    for line in text.splitlines():
+    keys = (
+        ("minimum password length", "min_length"),
+        ("maximum password age", "max_age"),
+        ("minimum password age", "min_age"),
+        ("length of password history", "history"),
+        ("lockout threshold", "lockout_threshold"),
+        ("lockout duration", "lockout_duration"),
+        ("lockout observation window", "lockout_window"),
+    )
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.rsplit(None, 1)
+        if not parts:
+            continue
+        val = parts[-1].strip()
+        if not val:
+            continue
         lower = line.lower()
-        val = line.rsplit(None, 1)[-1].strip()
-        if "minimum password length" in lower:
-            out["min_length"] = _to_int(val)
-        elif "maximum password age" in lower:
-            out["max_age"] = _to_int(val)
-        elif "minimum password age" in lower:
-            out["min_age"] = _to_int(val)
-        elif "length of password history" in lower:
-            out["history"] = _to_int(val)
-        elif "lockout threshold" in lower:
-            out["lockout_threshold"] = _to_int(val)
-        elif "lockout duration" in lower:
-            out["lockout_duration"] = _to_int(val)
-        elif "lockout observation window" in lower:
-            out["lockout_window"] = _to_int(val)
+        for needle, key in keys:
+            if needle in lower:
+                out[key] = _to_int(val)
+                break
     return out
 
 
